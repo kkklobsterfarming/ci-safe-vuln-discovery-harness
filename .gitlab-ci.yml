@@ -8,7 +8,7 @@ vulnerability_discovery_harness:
   variables:
     VULN_HARNESS_FAIL_ON: "none"
   script:
-    - python vuln_discovery_harness.py --root . --out reports/vuln-harness --fail-on "$VULN_HARNESS_FAIL_ON"
+    - python harness/vuln_discovery_harness.py --root . --out reports/vuln-harness --fail-on "$VULN_HARNESS_FAIL_ON"
   artifacts:
     when: always
     expire_in: 14 days

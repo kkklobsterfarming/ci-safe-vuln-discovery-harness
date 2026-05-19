@@ -4,18 +4,27 @@ A lightweight vulnerability discovery harness for GitHub Actions and GitLab CI, 
 
 This repository is intentionally **defensive and CI-safe**. It does not generate exploit payloads, weaponized proof-of-concept code, or offensive instructions. The proof stage emits safe verification and regression-test plans only.
 
+## Repo layout
+
+```text
+harness/
+  vuln_discovery_harness.py        # standalone CI harness
+skill/
+  ci-safe-vuln-discovery/          # AgentSkill package
+    SKILL.md
+    scripts/vuln_discovery_harness.py
+    references/
+.github/workflows/
+  vulnerability-discovery.yml      # GitHub Actions workflow
+.gitlab-ci.yml                     # GitLab CI job
+```
+
 ## What it does
 
 The harness runs these stages:
 
 1. **Recon** — inventory files, manifests, extensions, and likely security-boundary areas.
-2. **Hunt** — scan for candidate vulnerability patterns:
-   - command injection sinks
-   - SQL construction risks
-   - path traversal / filesystem sinks
-   - unsafe deserialization
-   - SSRF / outbound request sinks
-   - hardcoded secrets
+2. **Hunt** — scan for command injection, SQL construction, path traversal, unsafe deserialization, SSRF, and hardcoded secrets.
 3. **Validate** — suppress obvious test/fixture noise and raise confidence for stronger signals.
 4. **Gapfill** — create follow-up tasks for missing coverage areas and suspicious boundaries.
 5. **Dedupe** — collapse likely duplicate root causes.
@@ -28,8 +37,8 @@ The harness runs these stages:
 
 By default, reports are written to `reports/vuln-harness/`:
 
-- `report.json` — complete machine-readable report
-- `report.md` — human-readable summary
+- `report.json`
+- `report.md`
 - `findings.json`
 - `sources.json`
 - `gapfill.json`
@@ -42,7 +51,7 @@ Secret-like evidence is redacted in generated reports.
 ## Local usage
 
 ```bash
-python vuln_discovery_harness.py --root . --out reports/vuln-harness --fail-on none
+python harness/vuln_discovery_harness.py --root . --out reports/vuln-harness --fail-on none
 ```
 
 Failure policies:
@@ -52,33 +61,25 @@ Failure policies:
 - `validated` — fail if validated candidates exist
 - `reachable` — fail if possibly reachable findings exist
 
-Example:
-
-```bash
-python vuln_discovery_harness.py --root . --out reports/vuln-harness --fail-on validated
-```
-
 ## GitHub Actions
 
-Copy `.github/workflows/vulnerability-discovery.yml` into your repository. It runs on PRs, pushes to `main`/`master`, and manual dispatch.
-
-The workflow uploads the full report directory as an artifact.
+Use `.github/workflows/vulnerability-discovery.yml` as-is in this repo, or copy it into another repo with `harness/vuln_discovery_harness.py`.
 
 ## GitLab CI
 
-Copy `.gitlab-ci.yml` into your repository or merge the `vulnerability_discovery_harness` job into your existing pipeline.
+Use `.gitlab-ci.yml` as-is, or merge the job into an existing GitLab pipeline.
 
-It runs in the `security` stage and uploads the generated report artifacts.
+## AgentSkill
+
+The `skill/ci-safe-vuln-discovery/` folder is a packaged AgentSkill version of this workflow. Copy or install that folder into an agent skills directory when you want assistants to know how to add, run, tune, and interpret the harness.
 
 ## Optional Semgrep pass
 
-If `semgrep` is installed in the CI image, you can enable an additional Semgrep security-audit pass:
+If `semgrep` is installed in the CI image, enable an additional Semgrep security-audit pass:
 
 ```bash
-VULN_HARNESS_RUN_SEMGREP=1 python vuln_discovery_harness.py --root . --out reports/vuln-harness
+VULN_HARNESS_RUN_SEMGREP=1 python harness/vuln_discovery_harness.py --root . --out reports/vuln-harness
 ```
-
-The result is saved as `semgrep.json` and summarized in `report.json`.
 
 ## Important limits
 
