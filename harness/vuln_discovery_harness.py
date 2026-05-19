@@ -186,6 +186,8 @@ class ProofPlan:
     safe_steps: list[str]
     prohibited: list[str]
     regression_test_hint: str
+    defensive_test_template: str
+    reviewer_prompt: str
 
 
 def redact_secret_evidence(text: str) -> str:
@@ -503,6 +505,61 @@ def feedback(findings: list[Finding], gapfill_tasks: list[GapfillTask], traces: 
     return tasks
 
 
+def defensive_template_for(f: Finding) -> str:
+    templates = {
+        "secret exposure": """# Defensive check template
+# Assert committed files do not contain the detected secret pattern.
+# If this fails, rotate the value and move it to CI secrets/vault-backed env vars.
+def test_no_committed_secret_pattern():
+    assert scan_repository_for_secret_patterns() == []
+""",
+        "command injection": """# Defensive regression template
+# Exercise the command wrapper with synthetic metacharacter-like input.
+# Expected result: input is treated as inert data or rejected before execution.
+def test_command_execution_uses_argv_and_rejects_shell_metacharacters():
+    result = call_command_wrapper_with_synthetic_input("SAFE_TEST_INPUT_WITH_METACHARS")
+    assert result.was_rejected or result.used_argument_vector_without_shell
+""",
+        "SQL injection": """# Defensive regression template
+# Expected result: untrusted values are bound parameters, never query text.
+def test_query_uses_bound_parameters_for_untrusted_values():
+    query = build_query_with_synthetic_untrusted_value("SAFE_TEST_VALUE")
+    assert query.uses_bound_parameters
+    assert "SAFE_TEST_VALUE" not in query.sql_text
+""",
+        "path traversal": """# Defensive regression template
+# Expected result: traversal-like synthetic paths are rejected or normalized inside base dir.
+def test_paths_cannot_escape_allowed_base_directory():
+    result = resolve_user_path("SYNTHETIC_TRAVERSAL_INPUT")
+    assert result.was_rejected or result.resolved_path.is_relative_to(ALLOWED_BASE_DIR)
+""",
+        "unsafe deserialization": """# Defensive regression template
+# Expected result: untrusted serialized input is rejected or handled by a safe parser.
+def test_untrusted_serialized_input_uses_safe_parser():
+    result = parse_untrusted_serialized_input("SYNTHETIC_UNTRUSTED_INPUT")
+    assert result.was_rejected or result.parser_is_safe
+""",
+        "SSRF": """# Defensive regression template
+# Expected result: non-allowlisted and private-network destinations are blocked before fetch.
+def test_outbound_url_validation_blocks_untrusted_destinations():
+    result = validate_outbound_url("https://example.invalid/synthetic")
+    assert result.was_rejected or result.host_is_explicitly_allowlisted
+""",
+    }
+    return templates.get(f.attack_class, "# Add a focused defensive regression test for the expected safe behavior.\n")
+
+
+def reviewer_prompt_for(f: Finding) -> str:
+    return (
+        "Review this finding only for defensive validation. "
+        "Do not create exploit payloads, bypass instructions, or offensive PoCs. "
+        "Determine whether the code path is reachable in authorized test scope, "
+        "identify the expected safe behavior, and propose a regression test using synthetic inert inputs. "
+        f"Finding: {f.severity} {f.attack_class} at {f.file}:{f.line}. "
+        f"Evidence: {f.evidence}"
+    )
+
+
 def proof(findings: list[Finding]) -> list[ProofPlan]:
     plans: list[ProofPlan] = []
     for f in findings:
@@ -512,31 +569,34 @@ def proof(findings: list[Finding]) -> list[ProofPlan]:
             continue
         objective = f"Safely verify whether {f.attack_class} at {f.file}:{f.line} is real and prevent regressions if fixed."
         generic_steps = [
-            "Reproduce only inside an isolated CI/test environment with synthetic fixtures.",
+            "Reproduce only inside an isolated CI/test environment with synthetic inert fixtures.",
             "Confirm the vulnerable code path and expected safe behavior before changing code.",
             "Add a unit or integration regression test that asserts sanitized/rejected handling of malformed input.",
-            "Avoid external network targets, real credentials, production data, or destructive side effects.",
+            "Avoid external network targets, real credentials, production data, destructive side effects, exploit chains, and bypass techniques.",
         ]
         hints = {
             "secret exposure": "Assert no committed files match the secret pattern and move required values to CI secrets/vault-backed environment variables.",
             "command injection": "Test that command execution uses argv arrays/allowlists and rejects metacharacters as data, without invoking a shell.",
             "SQL injection": "Test that untrusted values are passed as bound parameters and cannot alter query structure.",
-            "path traversal": "Test that ../, absolute paths, symlinks, and encoded traversal stay within the allowed base directory or are rejected.",
+            "path traversal": "Test that traversal-like synthetic paths stay within the allowed base directory or are rejected.",
             "unsafe deserialization": "Test that untrusted serialized input is rejected or parsed by safe loaders only.",
             "SSRF": "Test that non-allowlisted hosts, private IP ranges, metadata IPs, and scheme changes are rejected before outbound fetch.",
         }
         plan = ProofPlan(
             id=fingerprint("proof", f.id),
             finding_id=f.id,
-            mode="safe_regression_plan_only",
+            mode="safe_defensive_reproduction_and_regression_plan",
             objective=objective,
             safe_steps=generic_steps,
             prohibited=[
                 "Do not generate exploit payloads or weaponized proof-of-concept code.",
                 "Do not target third-party or production systems.",
                 "Do not print, persist, or upload real secrets in CI artifacts.",
+                "Do not reframe prompts to bypass model or tool safety refusals.",
             ],
             regression_test_hint=hints.get(f.attack_class, "Add a focused regression test for the expected safe behavior."),
+            defensive_test_template=defensive_template_for(f),
+            reviewer_prompt=reviewer_prompt_for(f),
         )
         f.proof_plan_id = plan.id
         f.tags.append("proof")
